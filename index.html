@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SimuCivilisation - Phase 9</title>
+    <style>
+      :root { color-scheme: dark; font-family: Inter, system-ui, sans-serif; }
+      body { margin: 0; background:#0f1115; color:#eef2ff; }
+      .layout { display:grid; grid-template-columns:minmax(340px,460px) 1fr; gap:16px; padding:16px; }
+      .panel { background:#1b1f29; border:1px solid #2a3140; border-radius:8px; padding:14px; }
+      input, button, select { width:100%; margin:4px 0 8px; padding:8px; border-radius:6px; border:1px solid #3a455a; background:#10141c; color:#eef2ff; }
+      button { background:#365cf5; border:none; cursor:pointer; }
+      canvas.world { width:min(80vmin,720px); height:min(80vmin,720px); image-rendering:pixelated; border:1px solid #2a3140; border-radius:6px; background:#000; }
+      .small-grid { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+      canvas.chart { width:100%; height:120px; border:1px solid #2a3140; border-radius:6px; }
+      .legend { display:grid; grid-template-columns:repeat(2, minmax(120px, 1fr)); gap:6px; font-size:13px; }
+      .legend-item { display:flex; align-items:center; gap:8px; }
+      .swatch { width:14px; height:14px; border-radius:3px; }
+      .tribe-culture-list { display:flex; flex-direction:column; gap:10px; }
+      .tribe-card { background:#151924; border:1px solid #2f384a; border-radius:6px; padding:8px; }
+      .culture-row { display:grid; grid-template-columns:82px 1fr 40px; gap:6px; align-items:center; font-size:12px; }
+      .culture-bar-track { height:8px; background:#2b3343; border-radius:999px; overflow:hidden; }
+      .culture-bar-fill { height:100%; background:linear-gradient(90deg, #6bcb77, #4d96ff); }
+      .belief-line { margin:6px 0 0; font-size:12px; color:#c9d3e8; }
+      pre { white-space:pre-wrap; background:#10141c; border:1px solid #2a3140; border-radius:6px; padding:8px; }
+      @media (max-width: 980px) { .layout { grid-template-columns: 1fr; } .small-grid { grid-template-columns:1fr; } }
+    </style>
+  </head>
+  <body>
+    <main class="layout">
+      <section class="panel">
+        <h1>SimuCivilisation - Phase 9</h1>
+        <p>Monde évolutif : saisons, climat, catastrophes, migrations + mode expérimentation.</p>
+
+        <label for="seedInput">Seed</label>
+        <input id="seedInput" type="text" value="phase9-demo" />
+        <button id="generateButton">Générer un nouveau monde</button>
+
+        <h2>Sauvegarde / Replay</h2>
+        <button id="saveButton">Save</button>
+        <button id="loadButton">Load (dernier save)</button>
+        <label for="snapshotSelect">Snapshots disponibles</label>
+        <select id="snapshotSelect"></select>
+        <button id="loadSnapshotButton">Load snapshot</button>
+        <p id="tickOutput">Tick courant: 0</p>
+        <p id="statusOutput">Statut: prêt</p>
+        <p id="seasonOutput">Saison: spring | Année: 0 | Jour: 0</p>
+        <p id="climateOutput">Climat global -> tempShift: 0.000 | humidityShift: 0.000</p>
+        <p id="eventsOutput">Events actifs: 0</p>
+
+        <h2>Population agents</h2>
+        <p id="populationOutput">Population: 0 | Naissances tick: 0 | Morts tick: 0</p>
+
+        <h2>Statistiques tribus</h2>
+        <p id="tribeStatsOutput">Tribus: 0 | Taille moyenne: 0.00 | Dissoutes tick: 0</p>
+
+        <h2>Moyenne culturelle globale</h2>
+        <p id="cultureAverageOutput">Moyenne culturelle globale → tech: 0.00 | war: 0.00 | education: 0.00 | trade: 0.00 | ecology: 0.00 | spirituality: 0.00</p>
+
+        <h2>Interactions inter-tribus</h2>
+        <p id="interactionOutput">Interactions tick: 0 | trade: 0 | cooperate: 0 | betray: 0 | attack: 0 | avoid: 0 | trust moyen: 0.00</p>
+
+        <h2>Croyances</h2>
+        <p id="beliefOutput">Croyances actives: 0</p>
+
+        <h2>Technologie globale</h2>
+        <p id="technologyOutput">Tech moyenne: 0.00 | Niveaux cumulés: 0</p>
+
+        <h2>Mode Multi-run</h2>
+        <label for="runsInput">Nombre de runs</label>
+        <input id="runsInput" type="number" value="10" min="1" />
+        <label for="ticksPerRunInput">Ticks par run</label>
+        <input id="ticksPerRunInput" type="number" value="300" min="10" />
+        <button id="runExperimentsButton">Run experiments</button>
+        <pre id="experimentsOutput">Résultats des expériences ici.</pre>
+
+        <h2>Tests moteur intégrés</h2>
+        <ul id="testsOutput"></ul>
+
+        <h2>Légende des biomes</h2>
+        <div id="legend" class="legend"></div>
+      </section>
+
+      <section class="panel">
+        <canvas id="worldCanvas" class="world" width="160" height="160"></canvas>
+        <h2>Graphes</h2>
+        <div class="small-grid">
+          <canvas id="popChart" class="chart" width="480" height="120"></canvas>
+          <canvas id="tribeChart" class="chart" width="480" height="120"></canvas>
+          <canvas id="techChart" class="chart" width="480" height="120"></canvas>
+          <canvas id="beliefChart" class="chart" width="480" height="120"></canvas>
+          <canvas id="interactionChart" class="chart" width="480" height="120"></canvas>
+          <canvas id="eventsChart" class="chart" width="480" height="120"></canvas>
+        </div>
+
+        <h2>Détail tribus</h2>
+        <div id="tribeCultureOutput" class="tribe-culture-list"></div>
+      </section>
+    </main>
+
+    <script type="module" src="./src/ui/main.js"></script>
+  </body>
+</html>
