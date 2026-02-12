@@ -16,7 +16,10 @@ import {
 import { createChartsRenderer, createChartStore } from './charts.js';
 
 const WORLD_SIZE = 160;
-const INITIAL_AGENTS = 120;
+const INITIAL_AGENTS = 80;
+const SIMULATION_INTERVAL_MS = 350;
+const UI_UPDATE_EVERY_TICKS = 2;
+const MAX_RENDERED_TRIBES = 16;
 const SNAPSHOT_EVERY = 50;
 const MAX_SNAPSHOTS = 20;
 
@@ -109,6 +112,17 @@ function refreshSnapshotDropdown(seed) {
 
 function setStatus(text) { statusOutput.textContent = text; }
 function updateTickLabel() { tickOutput.textContent = `Tick courant: ${tick}`; }
+function shouldRenderFullUi(currentTick) { return currentTick <= 2 || currentTick % UI_UPDATE_EVERY_TICKS === 0; }
+
+function renderTribeCulturePanel(tribes) {
+  const visible = tribes.slice(0, MAX_RENDERED_TRIBES);
+  renderTribeCulture(tribeCultureOutput, visible);
+  if (tribes.length > MAX_RENDERED_TRIBES) {
+    const note = document.createElement('p');
+    note.textContent = `Affichage limite a ${MAX_RENDERED_TRIBES} tribus sur ${tribes.length} (perf).`;
+    tribeCultureOutput.appendChild(note);
+  }
+}
 
 function renderEnvironmentInfo(state, stats) {
   const season = state?.environmentState?.seasonState;
@@ -134,7 +148,7 @@ function applyLoadedState(loaded) {
   renderer.render(currentWorld, currentAgents, currentTribes, currentInteractionEvents, currentSimulationState.activeEvents ?? []);
   renderPopulation(populationOutput, { population: currentAgents.length, births: 0, deaths: 0 });
   renderTribeStats(tribeStatsOutput, { tribes: currentTribes.length, averageTribeSize: 0, dissolvedTribes: 0 });
-  renderTribeCulture(tribeCultureOutput, currentTribes);
+  renderTribeCulturePanel(currentTribes);
   renderEnvironmentInfo(currentSimulationState);
   updateTickLabel();
 }
@@ -192,7 +206,7 @@ function buildSimulation(seed) {
   renderInteractionStats(interactionOutput, { interactionsThisTick: 0, interactionBreakdown: { trade: 0, cooperate: 0, betray: 0, attack: 0, avoid: 0 }, meanTrustScore: 0 });
   renderBeliefStats(beliefOutput, { totalBeliefs: 0, topBeliefs: [] });
   renderTechnologyStats(technologyOutput, { meanGlobalTechLevel: 0, totalTechLevels: 0, techLevelDistribution: {} });
-  renderTribeCulture(tribeCultureOutput, []);
+  renderTribeCulturePanel([]);
   chartsRenderer.render(chartStore.series);
   renderEnvironmentInfo(currentSimulationState);
 
@@ -210,18 +224,19 @@ function stepSimulation() {
   currentInteractionEvents = result.interactionEvents ?? [];
   currentSimulationState = result.simulationState;
 
-  renderer.render(currentWorld, currentAgents, currentTribes, currentInteractionEvents, currentSimulationState.activeEvents ?? []);
-  renderPopulation(populationOutput, result.stats);
-  renderTribeStats(tribeStatsOutput, result.stats);
-  renderGlobalCulture(cultureAverageOutput, result.stats.cultureAverage ?? {});
-  renderInteractionStats(interactionOutput, result.stats);
-  renderBeliefStats(beliefOutput, result.stats);
-  renderTechnologyStats(technologyOutput, result.stats);
-  renderTribeCulture(tribeCultureOutput, currentTribes);
-
   chartStore.addPoint(tick, result.stats);
-  chartsRenderer.render(chartStore.series);
-  renderEnvironmentInfo(currentSimulationState, result.stats);
+  if (shouldRenderFullUi(tick)) {
+    renderer.render(currentWorld, currentAgents, currentTribes, currentInteractionEvents, currentSimulationState.activeEvents ?? []);
+    renderPopulation(populationOutput, result.stats);
+    renderTribeStats(tribeStatsOutput, result.stats);
+    renderGlobalCulture(cultureAverageOutput, result.stats.cultureAverage ?? {});
+    renderInteractionStats(interactionOutput, result.stats);
+    renderBeliefStats(beliefOutput, result.stats);
+    renderTechnologyStats(technologyOutput, result.stats);
+    renderTribeCulturePanel(currentTribes);
+    chartsRenderer.render(chartStore.series);
+    renderEnvironmentInfo(currentSimulationState, result.stats);
+  }
   updateTickLabel();
   autoSnapshot();
 }
@@ -231,7 +246,7 @@ function startLoop() {
   simulationTimer = setInterval(() => {
     if (!currentWorld) return;
     stepSimulation();
-  }, 250);
+  }, SIMULATION_INTERVAL_MS);
 }
 
 function runExperimentsUI() {

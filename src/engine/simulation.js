@@ -29,6 +29,7 @@ const NEAR_DISTANCE = 2;
 const SHARE_DISTANCE = 1;
 const TRIBE_FORMATION_TICKS = 6;
 const MAX_TRIBE_SPREAD = 8;
+const MAX_TRIBE_SIZE = 32;
 const INTERACTION_DISTANCE = 12;
 const INTERACTION_COOLDOWN = 4;
 
@@ -246,6 +247,55 @@ function createTribesFromCooperation(agents, existingTribes, counters, exchangeS
   });
 
   return { tribes, memberToTribe };
+}
+
+function recruitAgentsIntoExistingTribes(agents, tribes, memberToTribe, counters) {
+  const aliveMap = new Map(agents.filter((agent) => agent.isAlive).map((agent) => [agent.id, agent]));
+  const tribeById = new Map(tribes.map((tribe) => [tribe.id, tribe]));
+  const supportByAgent = new Map();
+
+  function addSupport(agentId, tribeId, score) {
+    let byTribe = supportByAgent.get(agentId);
+    if (!byTribe) {
+      byTribe = new Map();
+      supportByAgent.set(agentId, byTribe);
+    }
+    byTribe.set(tribeId, (byTribe.get(tribeId) ?? 0) + score);
+  }
+
+  Object.entries(counters).forEach(([key, proximityTicks]) => {
+    if (proximityTicks < 2) return;
+    const [idA, idB] = key.split('|');
+    const tribeA = memberToTribe.get(idA);
+    const tribeB = memberToTribe.get(idB);
+
+    if (tribeA && !tribeB) addSupport(idB, tribeA, proximityTicks);
+    if (tribeB && !tribeA) addSupport(idA, tribeB, proximityTicks);
+  });
+
+  supportByAgent.forEach((tribeScores, agentId) => {
+    if (memberToTribe.has(agentId)) return;
+    const agent = aliveMap.get(agentId);
+    if (!agent) return;
+
+    let bestTribe = null;
+    let bestScore = -Infinity;
+    tribeScores.forEach((supportScore, tribeId) => {
+      const tribe = tribeById.get(tribeId);
+      if (!tribe || tribe.members.length >= MAX_TRIBE_SIZE) return;
+      const spread = Math.max(Math.abs(agent.x - tribe.center.x), Math.abs(agent.y - tribe.center.y));
+      if (spread > MAX_TRIBE_SPREAD) return;
+      const score = supportScore - spread * 0.75 + tribe.stability * 0.3;
+      if (score > bestScore) {
+        bestScore = score;
+        bestTribe = tribe;
+      }
+    });
+
+    if (!bestTribe || bestScore < TRIBE_FORMATION_TICKS * 0.5) return;
+    bestTribe.members.push(agentId);
+    memberToTribe.set(agentId, bestTribe.id);
+  });
 }
 
 function updateTribesAfterAgentChanges(agents, tribes, memberToTribe) {
@@ -547,6 +597,7 @@ export function tickSimulation(world, agents, tick, seed = world.seed, simulatio
   const proximityCounters = updateProximityCounters(merged, simulationState.proximityCounters ?? {});
   const exchangeSet = performLocalSharing(merged, proximityCounters, memberToTribe, tribeById);
   const formed = createTribesFromCooperation(merged, previousTribes, proximityCounters, exchangeSet);
+  recruitAgentsIntoExistingTribes(merged, formed.tribes, formed.memberToTribe, proximityCounters);
   const updated = updateTribesAfterAgentChanges(merged, formed.tribes, formed.memberToTribe);
 
   const deathsFromEnergy = nextAgents.length - survivors.length;
