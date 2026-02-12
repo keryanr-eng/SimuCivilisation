@@ -28,8 +28,8 @@ import { regenerateWorld } from './world.js';
 const NEAR_DISTANCE = 2;
 const SHARE_DISTANCE = 1;
 const TRIBE_FORMATION_TICKS = 6;
-const MAX_TRIBE_SPREAD = 8;
-const MAX_TRIBE_SIZE = 32;
+const MAX_TRIBE_SPREAD = 12;
+const MAX_TRIBE_SIZE = 64;
 const INTERACTION_DISTANCE = 12;
 const INTERACTION_COOLDOWN = 4;
 
@@ -76,13 +76,24 @@ function bestLocalMove(world, x, y, maxStep, activeEvents = []) {
   return best;
 }
 
-function moveAgent(agent, world, tick, seed, movementBonus = 0, activeEvents = []) {
+function moveAgent(agent, world, tick, seed, movementBonus = 0, activeEvents = [], tribeCenter = null) {
   const maxStep = computeMovementSteps(movementBonus);
   const moveSeed = `${seed}|move|${agent.id}|${tick}`;
   const range = maxStep * 2 + 1;
   const driftX = Math.floor(makeDeterministicValue(moveSeed, 'dx') * range) - maxStep;
   const driftY = Math.floor(makeDeterministicValue(moveSeed, 'dy') * range) - maxStep;
   const cautiousBias = agent.traits.prudence > 0.7 ? 0 : 1;
+
+  if (tribeCenter) {
+    const toCenterX = Math.round(tribeCenter.x - agent.x);
+    const toCenterY = Math.round(tribeCenter.y - agent.y);
+    const spread = Math.max(Math.abs(toCenterX), Math.abs(toCenterY));
+    if (spread > MAX_TRIBE_SPREAD * 0.6) {
+      agent.x = clamp(agent.x + Math.sign(toCenterX) * Math.min(maxStep, Math.abs(toCenterX)), 0, world.width - 1);
+      agent.y = clamp(agent.y + Math.sign(toCenterY) * Math.min(maxStep, Math.abs(toCenterY)), 0, world.height - 1);
+      return;
+    }
+  }
 
   const currentTile = world.tiles[tileIndex(world, agent.x, agent.y)];
   const poorArea = currentTile.resources.food < 18 || currentTile.resources.water < 14;
@@ -147,18 +158,25 @@ function applyLifeCosts(agent) {
   }
 }
 
-function maybeReproduce(agent, agents, newborns, world, tick, seed, tribe) {
-  if (!agent.isAlive || agent.energy < 95 || agent.age < 20) return;
+function maybeReproduce(agent, agents, newborns, world, tick, seed, tribe, memberToTribe) {
+  if (!agent.isAlive || agent.energy < 95 || agent.age < 20) return null;
   const roll = makeDeterministicValue(`${seed}|repro|${agent.id}|${tick}`, 'chance');
   const warCulture = tribe?.culture.war ?? 0;
   const chance = 0.02 + agent.traits.patience * 0.02 + warCulture * 0.01;
-  if (roll > chance) return;
+  if (roll > chance) return null;
 
-  const partner = agents.find((candidate) =>
+  const parentTribeId = memberToTribe.get(agent.id);
+  const strictPartner = agents.find((candidate) =>
+    candidate.id !== agent.id && candidate.isAlive && candidate.energy >= 85 && candidate.age >= 20
+    && Math.abs(candidate.x - agent.x) <= 1 && Math.abs(candidate.y - agent.y) <= 1
+    && memberToTribe.get(candidate.id) === parentTribeId,
+  );
+
+  const partner = strictPartner ?? agents.find((candidate) =>
     candidate.id !== agent.id && candidate.isAlive && candidate.energy >= 85 && candidate.age >= 20
     && Math.abs(candidate.x - agent.x) <= 1 && Math.abs(candidate.y - agent.y) <= 1,
   );
-  if (!partner) return;
+  if (!partner) return null;
 
   const childX = clamp(agent.x + (Math.floor(makeDeterministicValue(seed, tick, agent.id, 'cx') * 3) - 1), 0, world.width - 1);
   const childY = clamp(agent.y + (Math.floor(makeDeterministicValue(seed, tick, agent.id, 'cy') * 3) - 1), 0, world.height - 1);
@@ -179,6 +197,7 @@ function maybeReproduce(agent, agents, newborns, world, tick, seed, tribe) {
   agent.remember(`reproduce:${child.id}`);
   partner.remember(`reproduce:${child.id}`);
   newborns.push(child);
+  return { childId: child.id, parentAId: agent.id, parentBId: partner.id };
 }
 
 function updateProximityCounters(agents, previousCounters) {
@@ -249,7 +268,7 @@ function createTribesFromCooperation(agents, existingTribes, counters, exchangeS
   return { tribes, memberToTribe };
 }
 
-function recruitAgentsIntoExistingTribes(agents, tribes, memberToTribe, counters) {
+function recruitAgentsIntoExistingTribes(agents, tribes, memberToTribe, counters, exchangeSet = new Set()) {
   const aliveMap = new Map(agents.filter((agent) => agent.isAlive).map((agent) => [agent.id, agent]));
   const tribeById = new Map(tribes.map((tribe) => [tribe.id, tribe]));
   const supportByAgent = new Map();
@@ -268,9 +287,10 @@ function recruitAgentsIntoExistingTribes(agents, tribes, memberToTribe, counters
     const [idA, idB] = key.split('|');
     const tribeA = memberToTribe.get(idA);
     const tribeB = memberToTribe.get(idB);
+    const supportScore = proximityTicks + (exchangeSet.has(key) ? 2 : 0);
 
-    if (tribeA && !tribeB) addSupport(idB, tribeA, proximityTicks);
-    if (tribeB && !tribeA) addSupport(idA, tribeB, proximityTicks);
+    if (tribeA && !tribeB) addSupport(idB, tribeA, supportScore);
+    if (tribeB && !tribeA) addSupport(idA, tribeB, supportScore);
   });
 
   supportByAgent.forEach((tribeScores, agentId) => {
@@ -292,9 +312,22 @@ function recruitAgentsIntoExistingTribes(agents, tribes, memberToTribe, counters
       }
     });
 
-    if (!bestTribe || bestScore < TRIBE_FORMATION_TICKS * 0.5) return;
+    if (!bestTribe || bestScore < 2) return;
     bestTribe.members.push(agentId);
     memberToTribe.set(agentId, bestTribe.id);
+  });
+}
+
+function assignNewbornsToParentTribes(tribes, memberToTribe, newbornAssignments) {
+  if (!newbornAssignments.length) return;
+  const tribeById = new Map(tribes.map((tribe) => [tribe.id, tribe]));
+
+  newbornAssignments.forEach((assignment) => {
+    if (memberToTribe.has(assignment.childId)) return;
+    const tribe = tribeById.get(assignment.tribeId);
+    if (!tribe || tribe.members.length >= MAX_TRIBE_SIZE) return;
+    tribe.members.push(assignment.childId);
+    memberToTribe.set(assignment.childId, assignment.tribeId);
   });
 }
 
@@ -580,16 +613,23 @@ export function tickSimulation(world, agents, tick, seed = world.seed, simulatio
   const tribeById = new Map(previousTribes.map((tribe) => [tribe.id, tribe]));
 
   const newborns = [];
+  const newbornAssignments = [];
   nextAgents.forEach((agent) => {
     if (!agent.isAlive) return;
     const tribe = tribeById.get(memberToTribe.get(agent.id));
     const beliefModifier = beliefModifierByTribe.get(tribe?.id);
     const techEffects = techEffectsByTribe.get(tribe?.id) ?? { movementBonus: 0, efficiencyBonus: 0 };
-    moveAgent(agent, worldClone, tick, seed, techEffects.movementBonus, envUpdate.activeEvents);
+    moveAgent(agent, worldClone, tick, seed, techEffects.movementBonus, envUpdate.activeEvents, tribe?.center ?? null);
     const tile = worldClone.tiles[tileIndex(worldClone, agent.x, agent.y)];
     harvestFood(agent, tile, tribe, beliefModifier, techEffects);
     applyLifeCosts(agent);
-    maybeReproduce(agent, nextAgents, newborns, worldClone, tick, seed, tribe);
+    const birth = maybeReproduce(agent, nextAgents, newborns, worldClone, tick, seed, tribe, memberToTribe);
+    if (birth) {
+      const tribeIdA = memberToTribe.get(birth.parentAId);
+      const tribeIdB = memberToTribe.get(birth.parentBId);
+      const targetTribeId = tribeIdA ?? tribeIdB;
+      if (targetTribeId) newbornAssignments.push({ childId: birth.childId, tribeId: targetTribeId });
+    }
   });
 
   const survivors = nextAgents.filter((agent) => agent.isAlive);
@@ -597,7 +637,8 @@ export function tickSimulation(world, agents, tick, seed = world.seed, simulatio
   const proximityCounters = updateProximityCounters(merged, simulationState.proximityCounters ?? {});
   const exchangeSet = performLocalSharing(merged, proximityCounters, memberToTribe, tribeById);
   const formed = createTribesFromCooperation(merged, previousTribes, proximityCounters, exchangeSet);
-  recruitAgentsIntoExistingTribes(merged, formed.tribes, formed.memberToTribe, proximityCounters);
+  assignNewbornsToParentTribes(formed.tribes, formed.memberToTribe, newbornAssignments);
+  recruitAgentsIntoExistingTribes(merged, formed.tribes, formed.memberToTribe, proximityCounters, exchangeSet);
   const updated = updateTribesAfterAgentChanges(merged, formed.tribes, formed.memberToTribe);
 
   const deathsFromEnergy = nextAgents.length - survivors.length;
