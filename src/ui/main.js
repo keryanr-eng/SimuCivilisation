@@ -1,6 +1,5 @@
 import { runExperiments } from '../engine/experiments.js';
 import { createInitialSimulationState, spawnInitialAgents, tickSimulation } from '../engine/simulation.js';
-import { runEngineTests } from '../engine/tests.js';
 import { deserializeAll, serializeAll } from '../engine/serialize.js';
 import { generateWorldMap } from '../engine/world.js';
 import {
@@ -11,7 +10,6 @@ import {
   renderLegend,
   renderPopulation,
   renderTechnologyStats,
-  renderTests,
   renderTribeCulture,
   renderTribeStats,
 } from './renderer.js';
@@ -187,8 +185,7 @@ function buildSimulation(seed) {
   chartStore.reset();
 
   renderer.render(currentWorld, currentAgents, currentTribes, currentInteractionEvents, currentSimulationState.activeEvents ?? []);
-  const tests = runEngineTests(currentWorld, seed, currentAgents);
-  renderTests(testsOutput, tests);
+  testsOutput.innerHTML = '<li>Tests desactives dans l\'UI (perf)</li>';
   renderPopulation(populationOutput, { population: currentAgents.length, births: 0, deaths: 0 });
   renderTribeStats(tribeStatsOutput, { tribes: 0, averageTribeSize: 0, dissolvedTribes: 0 });
   renderGlobalCulture(cultureAverageOutput, { tech: 0, war: 0, education: 0, trade: 0, ecology: 0, spirituality: 0 });
