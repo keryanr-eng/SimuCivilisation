@@ -26,6 +26,19 @@ const MAX_SNAPSHOTS = 20;
 const canvas = document.getElementById('worldCanvas');
 const seedInput = document.getElementById('seedInput');
 const generateButton = document.getElementById('generateButton');
+
+function ensurePauseResumeButton() {
+  const existing = document.getElementById('pauseResumeButton');
+  if (existing) return existing;
+  const button = document.createElement('button');
+  button.id = 'pauseResumeButton';
+  button.type = 'button';
+  button.textContent = 'Arreter simulation';
+  generateButton?.insertAdjacentElement('afterend', button);
+  return button;
+}
+
+const pauseResumeButton = ensurePauseResumeButton();
 const saveButton = document.getElementById('saveButton');
 const loadButton = document.getElementById('loadButton');
 const snapshotSelect = document.getElementById('snapshotSelect');
@@ -75,6 +88,8 @@ let currentInteractionEvents = [];
 let currentSimulationState = createInitialSimulationState();
 let tick = 0;
 let simulationTimer = null;
+let isPaused = false;
+let isRunningExperiments = false;
 
 function storageKey(seed) {
   return `simuciv:phase8:${seed}`;
@@ -113,6 +128,11 @@ function refreshSnapshotDropdown(seed) {
 function setStatus(text) { statusOutput.textContent = text; }
 function updateTickLabel() { tickOutput.textContent = `Tick courant: ${tick}`; }
 function shouldRenderFullUi(currentTick) { return currentTick <= 2 || currentTick % UI_UPDATE_EVERY_TICKS === 0; }
+function updatePauseResumeButton() {
+  if (!pauseResumeButton) return;
+  pauseResumeButton.textContent = isPaused ? 'Reprendre simulation' : 'Arreter simulation';
+  pauseResumeButton.disabled = isRunningExperiments;
+}
 
 function renderTribeCulturePanel(tribes) {
   const visible = tribes.slice(0, MAX_RENDERED_TRIBES);
@@ -254,19 +274,68 @@ function startLoop() {
     if (!currentWorld) return;
     stepSimulation();
   }, SIMULATION_INTERVAL_MS);
+  isPaused = false;
+  updatePauseResumeButton();
+}
+
+function stopLoop() {
+  if (!simulationTimer) return;
+  clearInterval(simulationTimer);
+  simulationTimer = null;
+  isPaused = true;
+  updatePauseResumeButton();
+}
+
+function toggleLoop() {
+  if (isRunningExperiments) return;
+  if (simulationTimer) {
+    stopLoop();
+    setStatus('Simulation en pause.');
+  } else {
+    startLoop();
+    setStatus('Simulation relancee.');
+  }
 }
 
 function runExperimentsUI() {
+  if (isRunningExperiments) return;
   const runs = Math.max(1, Number(runsInput.value) || 1);
   const ticksPerRun = Math.max(10, Number(ticksPerRunInput.value) || 100);
-  const output = runExperiments({ runs, ticksPerRun, baseSeed: seedInput.value.trim() || 'phase9-exp' });
-  experimentsOutput.textContent = [
-    `Runs: ${output.runs}, Ticks/run: ${output.ticksPerRun}`,
-    `Population finale -> mean:${output.summary.population.mean.toFixed(2)} var:${output.summary.population.variance.toFixed(2)} min:${output.summary.population.min} max:${output.summary.population.max}`,
-    `Tribus finales -> mean:${output.summary.tribes.mean.toFixed(2)} var:${output.summary.tribes.variance.toFixed(2)} min:${output.summary.tribes.min} max:${output.summary.tribes.max}`,
-    `Tech moyenne finale -> mean:${output.summary.tech.mean.toFixed(2)} var:${output.summary.tech.variance.toFixed(2)} min:${output.summary.tech.min.toFixed(2)} max:${output.summary.tech.max.toFixed(2)}`,
-    `Croyances finales -> mean:${output.summary.beliefs.mean.toFixed(2)} var:${output.summary.beliefs.variance.toFixed(2)} min:${output.summary.beliefs.min} max:${output.summary.beliefs.max}`,
-  ].join('\n');
+  const wasRunning = Boolean(simulationTimer);
+  if (wasRunning) stopLoop();
+
+  isRunningExperiments = true;
+  runExperimentsButton.disabled = true;
+  runExperimentsButton.textContent = 'Running...';
+  updatePauseResumeButton();
+  experimentsOutput.textContent = `Calcul en cours...\nRuns: ${runs} | Ticks/run: ${ticksPerRun}`;
+  setStatus('Experiments en cours...');
+
+  window.setTimeout(() => {
+    try {
+      const startedAt = performance.now();
+      const output = runExperiments({ runs, ticksPerRun, baseSeed: seedInput.value.trim() || 'phase9-exp' });
+      const elapsedSeconds = ((performance.now() - startedAt) / 1000).toFixed(2);
+      experimentsOutput.textContent = [
+        `Runs: ${output.runs}, Ticks/run: ${output.ticksPerRun}`,
+        `Population finale -> mean:${output.summary.population.mean.toFixed(2)} var:${output.summary.population.variance.toFixed(2)} min:${output.summary.population.min} max:${output.summary.population.max}`,
+        `Tribus finales -> mean:${output.summary.tribes.mean.toFixed(2)} var:${output.summary.tribes.variance.toFixed(2)} min:${output.summary.tribes.min} max:${output.summary.tribes.max}`,
+        `Tech moyenne finale -> mean:${output.summary.tech.mean.toFixed(2)} var:${output.summary.tech.variance.toFixed(2)} min:${output.summary.tech.min.toFixed(2)} max:${output.summary.tech.max.toFixed(2)}`,
+        `Croyances finales -> mean:${output.summary.beliefs.mean.toFixed(2)} var:${output.summary.beliefs.variance.toFixed(2)} min:${output.summary.beliefs.min} max:${output.summary.beliefs.max}`,
+        `Duree: ${elapsedSeconds}s | Maj: ${new Date().toLocaleTimeString()}`,
+      ].join('\n');
+      setStatus('Experiments termines.');
+    } catch (error) {
+      experimentsOutput.textContent = `Erreur experiments: ${error?.message ?? String(error)}`;
+      setStatus('Erreur pendant experiments.');
+    } finally {
+      isRunningExperiments = false;
+      runExperimentsButton.disabled = false;
+      runExperimentsButton.textContent = 'Run experiments';
+      if (wasRunning) startLoop();
+      updatePauseResumeButton();
+    }
+  }, 0);
 }
 
 generateButton.addEventListener('click', () => {
@@ -278,6 +347,7 @@ saveButton.addEventListener('click', manualSave);
 loadButton.addEventListener('click', manualLoad);
 loadSnapshotButton.addEventListener('click', loadSelectedSnapshot);
 runExperimentsButton.addEventListener('click', runExperimentsUI);
+pauseResumeButton?.addEventListener('click', toggleLoop);
 
 buildSimulation(seedInput.value.trim() || 'phase9-demo');
 startLoop();
