@@ -30,6 +30,7 @@ const SHARE_DISTANCE = 1;
 const TRIBE_FORMATION_TICKS = 6;
 const MAX_TRIBE_SPREAD = 12;
 const MAX_TRIBE_SIZE = 64;
+const MAX_POPULATION = 1400;
 const INTERACTION_DISTANCE = 12;
 const INTERACTION_COOLDOWN = 4;
 
@@ -47,6 +48,55 @@ function pairKey(idA, idB) {
 
 function tileIndex(world, x, y) {
   return y * world.width + x;
+}
+
+function buildSpatialBuckets(items, cellSize, getX, getY) {
+  const buckets = new Map();
+  items.forEach((item, index) => {
+    const cx = Math.floor(getX(item) / cellSize);
+    const cy = Math.floor(getY(item) / cellSize);
+    const key = `${cx},${cy}`;
+    let list = buckets.get(key);
+    if (!list) {
+      list = [];
+      buckets.set(key, list);
+    }
+    list.push(index);
+  });
+  return buckets;
+}
+
+function forEachNearbyPair(items, maxDistance, getX, getY, callback) {
+  if (items.length < 2) return;
+  const cellSize = Math.max(1, maxDistance + 1);
+  const buckets = buildSpatialBuckets(items, cellSize, getX, getY);
+  const cellRadius = Math.ceil(maxDistance / cellSize);
+
+  for (let i = 0; i < items.length; i += 1) {
+    const a = items[i];
+    const ax = getX(a);
+    const ay = getY(a);
+    const cx = Math.floor(ax / cellSize);
+    const cy = Math.floor(ay / cellSize);
+
+    for (let dy = -cellRadius; dy <= cellRadius; dy += 1) {
+      for (let dx = -cellRadius; dx <= cellRadius; dx += 1) {
+        const neighbors = buckets.get(`${cx + dx},${cy + dy}`);
+        if (!neighbors) continue;
+
+        for (let n = 0; n < neighbors.length; n += 1) {
+          const j = neighbors[n];
+          if (j <= i) continue;
+          const b = items[j];
+          const bx = getX(b);
+          const by = getY(b);
+          if (Math.max(Math.abs(ax - bx), Math.abs(ay - by)) <= maxDistance) {
+            callback(i, j, a, b);
+          }
+        }
+      }
+    }
+  }
 }
 
 export function computeMovementSteps(movementBonus = 0) {
@@ -160,9 +210,14 @@ function applyLifeCosts(agent) {
 
 function maybeReproduce(agent, agents, newborns, world, tick, seed, tribe, memberToTribe) {
   if (!agent.isAlive || agent.energy < 95 || agent.age < 20) return null;
+  const projectedPopulation = agents.length + newborns.length;
+  if (projectedPopulation >= MAX_POPULATION) return null;
+
   const roll = makeDeterministicValue(`${seed}|repro|${agent.id}|${tick}`, 'chance');
   const warCulture = tribe?.culture.war ?? 0;
-  const chance = 0.02 + agent.traits.patience * 0.02 + warCulture * 0.01;
+  const populationLoad = projectedPopulation / MAX_POPULATION;
+  const pressureMultiplier = Math.max(0.15, 1 - populationLoad);
+  const chance = (0.02 + agent.traits.patience * 0.02 + warCulture * 0.01) * pressureMultiplier;
   if (roll > chance) return null;
 
   const parentTribeId = memberToTribe.get(agent.id);
@@ -201,41 +256,36 @@ function maybeReproduce(agent, agents, newborns, world, tick, seed, tribe, membe
 }
 
 function updateProximityCounters(agents, previousCounters) {
-  const counters = { ...previousCounters };
   const aliveAgents = agents.filter((agent) => agent.isAlive);
-  for (let i = 0; i < aliveAgents.length; i += 1) {
-    for (let j = i + 1; j < aliveAgents.length; j += 1) {
-      const a = aliveAgents[i];
-      const b = aliveAgents[j];
-      const key = pairKey(a.id, b.id);
-      if (distance(a, b) <= NEAR_DISTANCE) counters[key] = (counters[key] ?? 0) + 1;
-      else delete counters[key];
-    }
-  }
+  const counters = {};
+  forEachNearbyPair(aliveAgents, NEAR_DISTANCE, (agent) => agent.x, (agent) => agent.y, (_i, _j, a, b) => {
+    const key = pairKey(a.id, b.id);
+    counters[key] = (previousCounters[key] ?? 0) + 1;
+  });
   return counters;
 }
 
 function performLocalSharing(agents, counters, memberToTribe, tribeById) {
   const exchanges = new Set();
-  const aliveAgents = agents.filter((agent) => agent.isAlive);
-  for (let i = 0; i < aliveAgents.length; i += 1) {
-    for (let j = i + 1; j < aliveAgents.length; j += 1) {
-      const a = aliveAgents[i];
-      const b = aliveAgents[j];
-      const key = pairKey(a.id, b.id);
-      if ((counters[key] ?? 0) < 2 || distance(a, b) > SHARE_DISTANCE) continue;
-      const tribeA = tribeById.get(memberToTribe.get(a.id));
-      const tribeB = tribeById.get(memberToTribe.get(b.id));
-      const threshold = 14 + Math.max(tribeA?.culture.war ?? 0, tribeB?.culture.war ?? 0) * 8 * 0.3;
-      const donor = a.energy > b.energy ? a : b;
-      const receiver = donor === a ? b : a;
-      if (donor.energy - receiver.energy > threshold && donor.energy > 55) {
-        donor.energy -= 3;
-        receiver.energy += 3;
-        exchanges.add(key);
-      }
+  const aliveById = new Map(agents.filter((agent) => agent.isAlive).map((agent) => [agent.id, agent]));
+  Object.entries(counters).forEach(([key, proximityTicks]) => {
+    if (proximityTicks < 2) return;
+    const [idA, idB] = key.split('|');
+    const a = aliveById.get(idA);
+    const b = aliveById.get(idB);
+    if (!a || !b || distance(a, b) > SHARE_DISTANCE) return;
+
+    const tribeA = tribeById.get(memberToTribe.get(a.id));
+    const tribeB = tribeById.get(memberToTribe.get(b.id));
+    const threshold = 14 + Math.max(tribeA?.culture.war ?? 0, tribeB?.culture.war ?? 0) * 8 * 0.3;
+    const donor = a.energy > b.energy ? a : b;
+    const receiver = donor === a ? b : a;
+    if (donor.energy - receiver.energy > threshold && donor.energy > 55) {
+      donor.energy -= 3;
+      receiver.energy += 3;
+      exchanges.add(key);
     }
-  }
+  });
   return exchanges;
 }
 
@@ -469,11 +519,15 @@ function processTribeInteractions(tribes, agents, tick, seed, previousMemory, be
   const agentMap = new Map(agents.map((agent) => [agent.id, agent]));
 
   const pairs = [];
-  for (let i = 0; i < tribes.length; i += 1) {
-    for (let j = i + 1; j < tribes.length; j += 1) {
-      if (distance(tribes[i].center, tribes[j].center) < INTERACTION_DISTANCE) pairs.push([tribes[i], tribes[j]]);
-    }
-  }
+  forEachNearbyPair(
+    tribes,
+    INTERACTION_DISTANCE,
+    (tribe) => tribe.center.x,
+    (tribe) => tribe.center.y,
+    (_i, _j, tribeA, tribeB) => {
+      pairs.push([tribeA, tribeB]);
+    },
+  );
 
   pairs.sort((a, b) => distance(a[0].center, a[1].center) - distance(b[0].center, b[1].center));
   const maxInteractions = Math.min(5, pairs.length);

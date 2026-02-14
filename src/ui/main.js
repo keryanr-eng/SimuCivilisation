@@ -17,9 +17,9 @@ import { createChartsRenderer, createChartStore } from './charts.js';
 
 const WORLD_SIZE = 160;
 const INITIAL_AGENTS = 80;
-const SIMULATION_INTERVAL_MS = 350;
-const UI_UPDATE_EVERY_TICKS = 2;
-const MAX_RENDERED_TRIBES = 16;
+const SIMULATION_INTERVAL_MS = 450;
+const UI_UPDATE_EVERY_TICKS = 3;
+const MAX_RENDERED_TRIBES = 10;
 const SNAPSHOT_EVERY = 50;
 const MAX_SNAPSHOTS = 20;
 
@@ -57,7 +57,7 @@ const interactionChart = document.getElementById('interactionChart');
 const eventsChart = document.getElementById('eventsChart');
 
 const renderer = createWorldRenderer(canvas);
-const chartStore = createChartStore(2000);
+const chartStore = createChartStore(1200);
 const chartsRenderer = createChartsRenderer({
   popCanvas: popChart,
   tribeCanvas: tribeChart,
@@ -128,11 +128,18 @@ function renderEnvironmentInfo(state, stats) {
   const season = state?.environmentState?.seasonState;
   const climate = state?.environmentState?.globalClimateState;
   const activeEvents = state?.activeEvents ?? [];
-  seasonOutput.textContent = `Saison: ${season?.seasonName ?? 'spring'} | Année: ${season?.year ?? 0} | Jour: ${season?.dayInYear ?? 0}`;
+  seasonOutput.textContent = `Saison: ${season?.seasonName ?? 'spring'} | Annee: ${season?.year ?? 0} | Jour: ${season?.dayInYear ?? 0}`;
   climateOutput.textContent = `Climat global -> tempShift: ${(climate?.globalTempShift ?? 0).toFixed(3)} | humidityShift: ${(climate?.globalHumidityShift ?? 0).toFixed(3)}`;
-  eventsOutput.textContent = activeEvents.length
-    ? `Events actifs (${activeEvents.length}) : ${activeEvents.map((e) => `${e.type}@(${e.x},${e.y}) r${e.radius} i${e.intensity.toFixed(2)} t${e.remainingTicks}`).join(' | ')}`
-    : `Events actifs: 0${stats ? ` | intensité moyenne: ${(stats.meanEventIntensity ?? 0).toFixed(2)}` : ''}`;
+  if (activeEvents.length) {
+    const preview = activeEvents
+      .slice(0, 3)
+      .map((e) => `${e.type}@(${e.x},${e.y}) r${e.radius} i${e.intensity.toFixed(2)} t${e.remainingTicks}`)
+      .join(' | ');
+    const more = activeEvents.length > 3 ? ` | +${activeEvents.length - 3} autres` : '';
+    eventsOutput.textContent = `Events actifs (${activeEvents.length}) : ${preview}${more}`;
+  } else {
+    eventsOutput.textContent = `Events actifs: 0${stats ? ` | intensite moyenne: ${(stats.meanEventIntensity ?? 0).toFixed(2)}` : ''}`;
+  }
 }
 
 function applyLoadedState(loaded) {
@@ -274,3 +281,4 @@ runExperimentsButton.addEventListener('click', runExperimentsUI);
 
 buildSimulation(seedInput.value.trim() || 'phase9-demo');
 startLoop();
+
