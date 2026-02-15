@@ -297,6 +297,312 @@ function toggleLoop() {
   }
 }
 
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+function formatFloat(value, digits = 2) {
+  const num = Number(value ?? 0);
+  if (!Number.isFinite(num)) return '-';
+  return num.toLocaleString('fr-FR', { minimumFractionDigits: digits, maximumFractionDigits: digits });
+}
+
+function formatInt(value) {
+  const num = Number(value ?? 0);
+  if (!Number.isFinite(num)) return '-';
+  return Math.round(num).toLocaleString('fr-FR');
+}
+
+function stdDev(variance) {
+  const safeVariance = Number(variance ?? 0);
+  return Math.sqrt(Math.max(0, safeVariance));
+}
+
+function stabilityLevel(summary) {
+  const mean = Math.abs(Number(summary?.mean ?? 0));
+  if (mean <= 1e-9) return 'Stable';
+  const cv = stdDev(summary?.variance) / mean;
+  if (cv < 0.15) return 'Stable';
+  if (cv < 0.35) return 'Moderee';
+  return 'Volatile';
+}
+
+function formatSummaryValue(summary, key) {
+  if (key === 'population' || key === 'tribes') return formatInt(summary.mean);
+  return formatFloat(summary.mean, 2);
+}
+
+function formatSummaryMinMax(summary, key, field) {
+  if (key === 'population' || key === 'tribes') return formatInt(summary[field]);
+  return formatFloat(summary[field], 2);
+}
+
+function computeHistogram(values, desiredBins = 8) {
+  if (!values.length) return { min: 0, max: 1, counts: [0], edges: [0, 1] };
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  if (Math.abs(max - min) < 1e-9) {
+    return { min, max, counts: [values.length], edges: [min - 0.5, max + 0.5] };
+  }
+
+  const bins = Math.max(4, Math.min(10, desiredBins));
+  const width = (max - min) / bins;
+  const counts = new Array(bins).fill(0);
+  const edges = new Array(bins + 1).fill(0).map((_, i) => min + i * width);
+
+  values.forEach((value) => {
+    const rawIndex = Math.floor((value - min) / width);
+    const index = Math.max(0, Math.min(bins - 1, rawIndex));
+    counts[index] += 1;
+  });
+
+  return { min, max, counts, edges };
+}
+
+function drawHistogramChart(canvas, values, title, color) {
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+  const width = canvas.width;
+  const height = canvas.height;
+  const left = 34;
+  const right = 10;
+  const top = 20;
+  const bottom = 22;
+  const plotWidth = width - left - right;
+  const plotHeight = height - top - bottom;
+
+  const hist = computeHistogram(values, Math.round(Math.sqrt(Math.max(4, values.length))));
+  const maxCount = Math.max(1, ...hist.counts);
+  const barStep = plotWidth / Math.max(1, hist.counts.length);
+  const barWidth = barStep * 0.72;
+
+  ctx.clearRect(0, 0, width, height);
+  ctx.fillStyle = '#0e1320';
+  ctx.fillRect(0, 0, width, height);
+
+  ctx.strokeStyle = '#243149';
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i += 1) {
+    const y = top + (plotHeight * i) / 4;
+    ctx.beginPath();
+    ctx.moveTo(left, y);
+    ctx.lineTo(width - right, y);
+    ctx.stroke();
+  }
+
+  ctx.fillStyle = color;
+  hist.counts.forEach((count, index) => {
+    const ratio = count / maxCount;
+    const h = Math.max(1, Math.round(plotHeight * ratio));
+    const x = left + index * barStep + (barStep - barWidth) / 2;
+    const y = top + plotHeight - h;
+    ctx.fillRect(x, y, barWidth, h);
+  });
+
+  ctx.fillStyle = '#d8e4ff';
+  ctx.font = '12px sans-serif';
+  ctx.fillText(title, 8, 14);
+
+  ctx.fillStyle = '#98a9c8';
+  ctx.font = '10px sans-serif';
+  ctx.fillText('runs', 6, top + 8);
+  ctx.fillText(String(maxCount), 6, top + 3);
+  ctx.fillText('0', 14, top + plotHeight + 3);
+  ctx.fillText(formatInt(hist.min), left, height - 6);
+  ctx.fillText(formatInt((hist.min + hist.max) / 2), left + plotWidth / 2 - 8, height - 6);
+  ctx.fillText(formatInt(hist.max), left + plotWidth - 16, height - 6);
+}
+
+function drawLineChart(canvas, values, title, color, forceZeroMin = true) {
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+  const width = canvas.width;
+  const height = canvas.height;
+  const left = 34;
+  const right = 10;
+  const top = 20;
+  const bottom = 22;
+  const plotWidth = width - left - right;
+  const plotHeight = height - top - bottom;
+
+  const safeValues = values.length ? values : [0];
+  let minV = Math.min(...safeValues);
+  let maxV = Math.max(...safeValues);
+  if (forceZeroMin) minV = Math.min(0, minV);
+  if (Math.abs(maxV - minV) < 1e-9) {
+    maxV += 1;
+    minV -= 1;
+  }
+
+  ctx.clearRect(0, 0, width, height);
+  ctx.fillStyle = '#0e1320';
+  ctx.fillRect(0, 0, width, height);
+
+  ctx.strokeStyle = '#243149';
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i += 1) {
+    const y = top + (plotHeight * i) / 4;
+    ctx.beginPath();
+    ctx.moveTo(left, y);
+    ctx.lineTo(width - right, y);
+    ctx.stroke();
+  }
+
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1.8;
+  ctx.beginPath();
+  safeValues.forEach((value, index) => {
+    const x = left + (plotWidth * index) / Math.max(1, safeValues.length - 1);
+    const normalized = (value - minV) / (maxV - minV);
+    const y = top + (1 - normalized) * plotHeight;
+    if (index === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+
+  ctx.fillStyle = '#d8e4ff';
+  ctx.font = '12px sans-serif';
+  ctx.fillText(title, 8, 14);
+
+  ctx.fillStyle = '#98a9c8';
+  ctx.font = '10px sans-serif';
+  ctx.fillText(`run 1`, left, height - 6);
+  ctx.fillText(`run ${safeValues.length}`, left + plotWidth - 36, height - 6);
+  ctx.fillText(formatFloat(maxV, 2), 4, top + 4);
+  ctx.fillText(formatFloat(minV, 2), 4, top + plotHeight + 3);
+}
+
+function renderExperimentsReport(output, elapsedSeconds) {
+  const metrics = [
+    { key: 'population', label: 'Population finale' },
+    { key: 'tribes', label: 'Tribus finales' },
+    { key: 'tech', label: 'Tech moyenne finale' },
+    { key: 'beliefs', label: 'Croyances finales' },
+    { key: 'trust', label: 'Confiance moyenne' },
+  ];
+
+  const metricRows = metrics.map((metric) => {
+    const summary = output.summary[metric.key] ?? { mean: 0, variance: 0, min: 0, max: 0 };
+    return `
+      <tr>
+        <td>${escapeHtml(metric.label)}</td>
+        <td>${formatSummaryValue(summary, metric.key)}</td>
+        <td>${formatFloat(stdDev(summary.variance), 2)}</td>
+        <td>${formatSummaryMinMax(summary, metric.key, 'min')}</td>
+        <td>${formatSummaryMinMax(summary, metric.key, 'max')}</td>
+        <td><span class="report-badge">${stabilityLevel(summary)}</span></td>
+      </tr>
+    `;
+  }).join('');
+
+  const previewRuns = output.records;
+  const runsRows = previewRuns.map((record, index) => `
+    <tr>
+      <td>#${index + 1}</td>
+      <td>${formatInt(record.finalPopulation)}</td>
+      <td>${formatInt(record.finalTribes)}</td>
+      <td>${formatFloat(record.meanTech, 2)}</td>
+      <td>${formatFloat(record.totalBeliefs, 2)}</td>
+      <td>${formatFloat(record.meanTrust, 2)}</td>
+    </tr>
+  `).join('');
+
+  const maxPopulationRun = output.records.reduce((best, current) => (
+    !best || current.finalPopulation > best.finalPopulation ? current : best
+  ), null);
+  const minPopulationRun = output.records.reduce((best, current) => (
+    !best || current.finalPopulation < best.finalPopulation ? current : best
+  ), null);
+
+  const generatedAt = new Date().toLocaleTimeString('fr-FR');
+  const meanPopulation = output.summary.population?.mean ?? 0;
+  const meanTribes = output.summary.tribes?.mean ?? 0;
+
+  experimentsOutput.innerHTML = `
+    <h3 class="report-title">Rapport Multi-run</h3>
+    <div class="report-grid">
+      <div class="report-kpi"><span class="report-kpi-label">Runs</span><span class="report-kpi-value">${formatInt(output.runs)}</span></div>
+      <div class="report-kpi"><span class="report-kpi-label">Ticks / run</span><span class="report-kpi-value">${formatInt(output.ticksPerRun)}</span></div>
+      <div class="report-kpi"><span class="report-kpi-label">Duree</span><span class="report-kpi-value">${formatFloat(elapsedSeconds, 2)} s</span></div>
+    </div>
+    <table class="report-table">
+      <thead>
+        <tr>
+          <th>Metrique</th>
+          <th>Moyenne</th>
+          <th>Ecart-type</th>
+          <th>Min</th>
+          <th>Max</th>
+          <th>Stabilite</th>
+        </tr>
+      </thead>
+      <tbody>${metricRows}</tbody>
+    </table>
+    <p class="report-muted">
+      Lecture rapide: apres ${formatInt(output.ticksPerRun)} ticks, une simulation termine en moyenne a ${formatInt(meanPopulation)} agents et ${formatFloat(meanTribes, 2)} tribus.
+      Maj: ${escapeHtml(generatedAt)}.
+    </p>
+    <p class="report-muted">
+      Meilleure population observee: ${formatInt(maxPopulationRun?.finalPopulation ?? 0)}. Plus faible: ${formatInt(minPopulationRun?.finalPopulation ?? 0)}.
+    </p>
+    <div class="report-charts">
+      <figure class="report-chart-card">
+        <figcaption class="report-chart-title">Distribution population finale</figcaption>
+        <canvas id="expPopHistCanvas" class="report-chart-canvas" width="420" height="190"></canvas>
+        <p class="report-chart-legend">Axe X: classes de population finale | Axe Y: nombre de runs dans chaque classe.</p>
+      </figure>
+      <figure class="report-chart-card">
+        <figcaption class="report-chart-title">Distribution tribus finales</figcaption>
+        <canvas id="expTribeHistCanvas" class="report-chart-canvas" width="420" height="190"></canvas>
+        <p class="report-chart-legend">Axe X: classes de nombre de tribus | Axe Y: nombre de runs.</p>
+      </figure>
+      <figure class="report-chart-card">
+        <figcaption class="report-chart-title">Tech moyenne finale par run</figcaption>
+        <canvas id="expTechRunCanvas" class="report-chart-canvas" width="420" height="190"></canvas>
+        <p class="report-chart-legend">Axe X: index du run | Axe Y: tech moyenne finale de ce run.</p>
+      </figure>
+      <figure class="report-chart-card">
+        <figcaption class="report-chart-title">Confiance moyenne finale par run</figcaption>
+        <canvas id="expTrustRunCanvas" class="report-chart-canvas" width="420" height="190"></canvas>
+        <p class="report-chart-legend">Axe X: index du run | Axe Y: confiance moyenne finale (peut etre negative).</p>
+      </figure>
+    </div>
+    <details class="report-details">
+      <summary>Detail run par run (${formatInt(output.records.length)} lignes)</summary>
+      <table class="report-table">
+        <thead>
+          <tr>
+            <th>Run</th>
+            <th>Population</th>
+            <th>Tribus</th>
+            <th>Tech</th>
+            <th>Croyances</th>
+            <th>Confiance</th>
+          </tr>
+        </thead>
+        <tbody>${runsRows}</tbody>
+      </table>
+    </details>
+  `;
+
+  const populationValues = output.records.map((record) => record.finalPopulation ?? 0);
+  const tribeValues = output.records.map((record) => record.finalTribes ?? 0);
+  const techValues = output.records.map((record) => record.meanTech ?? 0);
+  const trustValues = output.records.map((record) => record.meanTrust ?? 0);
+
+  drawHistogramChart(document.getElementById('expPopHistCanvas'), populationValues, 'Population finale', '#60a5fa');
+  drawHistogramChart(document.getElementById('expTribeHistCanvas'), tribeValues, 'Tribus finales', '#f59e0b');
+  drawLineChart(document.getElementById('expTechRunCanvas'), techValues, 'Tech moyenne finale', '#34d399', true);
+  drawLineChart(document.getElementById('expTrustRunCanvas'), trustValues, 'Confiance moyenne finale', '#f472b6', false);
+}
+
 function runExperimentsUI() {
   if (isRunningExperiments) return;
   const runs = Math.max(1, Number(runsInput.value) || 1);
@@ -308,25 +614,18 @@ function runExperimentsUI() {
   runExperimentsButton.disabled = true;
   runExperimentsButton.textContent = 'Running...';
   updatePauseResumeButton();
-  experimentsOutput.textContent = `Calcul en cours...\nRuns: ${runs} | Ticks/run: ${ticksPerRun}`;
+  experimentsOutput.innerHTML = `<div class="report-loading"><strong>Calcul en cours...</strong><br/>Runs: ${formatInt(runs)} | Ticks/run: ${formatInt(ticksPerRun)}</div>`;
   setStatus('Experiments en cours...');
 
   window.setTimeout(() => {
     try {
       const startedAt = performance.now();
       const output = runExperiments({ runs, ticksPerRun, baseSeed: seedInput.value.trim() || 'phase9-exp' });
-      const elapsedSeconds = ((performance.now() - startedAt) / 1000).toFixed(2);
-      experimentsOutput.textContent = [
-        `Runs: ${output.runs}, Ticks/run: ${output.ticksPerRun}`,
-        `Population finale -> mean:${output.summary.population.mean.toFixed(2)} var:${output.summary.population.variance.toFixed(2)} min:${output.summary.population.min} max:${output.summary.population.max}`,
-        `Tribus finales -> mean:${output.summary.tribes.mean.toFixed(2)} var:${output.summary.tribes.variance.toFixed(2)} min:${output.summary.tribes.min} max:${output.summary.tribes.max}`,
-        `Tech moyenne finale -> mean:${output.summary.tech.mean.toFixed(2)} var:${output.summary.tech.variance.toFixed(2)} min:${output.summary.tech.min.toFixed(2)} max:${output.summary.tech.max.toFixed(2)}`,
-        `Croyances finales -> mean:${output.summary.beliefs.mean.toFixed(2)} var:${output.summary.beliefs.variance.toFixed(2)} min:${output.summary.beliefs.min} max:${output.summary.beliefs.max}`,
-        `Duree: ${elapsedSeconds}s | Maj: ${new Date().toLocaleTimeString()}`,
-      ].join('\n');
+      const elapsedSeconds = (performance.now() - startedAt) / 1000;
+      renderExperimentsReport(output, elapsedSeconds);
       setStatus('Experiments termines.');
     } catch (error) {
-      experimentsOutput.textContent = `Erreur experiments: ${error?.message ?? String(error)}`;
+      experimentsOutput.innerHTML = `<div class="report-loading">Erreur experiments: ${escapeHtml(error?.message ?? String(error))}</div>`;
       setStatus('Erreur pendant experiments.');
     } finally {
       isRunningExperiments = false;
